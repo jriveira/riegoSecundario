@@ -23,7 +23,7 @@ class riegoSecundario:
     tpo_descuelgue = 0
 
     #Parámetros de configuración de la Inspección
-    modo = 0 # modo de riego 1:secuencial , 0:independiente
+    #modo = 0 # modo de riego 1:secuencial , 0:independiente
 
     caudal_refuerzo = 0
     dur_refuerzo = 0
@@ -43,7 +43,8 @@ class riegoSecundario:
              caudal_canal = 100,
              dur_turno = 24,
              fecha_inicio = "01-01-2022",
-             cabeza_cola = 1
+             cabeza_cola, # objeto JSON con el esquema de estrategias de riego del padron
+             modo # objeto JSON con los modos de riego del padron
              ):
    
        self.padron = pd.read_json(padron)  # Objeto json del padrón de riego.
@@ -53,7 +54,8 @@ class riegoSecundario:
        self.caudal_canal = caudal_canal
        self.dur_turno = dur_turno
        self.fecha_inicio = pd.to_datetime(fecha_inicio, dayfirst = True, errors = 'ignore')
-       self.cabeza_cola = cabeza_cola # Parámetro de configuración de estrategia de riego de la inspección
+       self.cabeza_cola = pd.read_json(cabeza_cola) # Parámetro de configuración de estrategia de riego de la inspección
+       self.modo = pd.read_json(modo)
 
        ''' 
        Listado del padrón de regantes: padron
