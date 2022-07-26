@@ -12,22 +12,10 @@ class riegoSecundario:
     """
 
 #    Definición de propiedades de la clase
-
     f_escala = ((24*60*60)/1000)
     f_lamina = 10
 
-    # se debe pasar con la configuración de la red de riego. Falta definir cómo se pasa a la API
-    tpo_rec_toma = 0
-    tpo_rec_cabeza_cola = 0
-    tpo_rec_cola_cabeza = 0
-    tpo_descuelgue = 0
-
     #Parámetros de configuración de la Inspección
-    #modo = 0 # modo de riego 1:secuencial , 0:independiente
-
-    caudal_refuerzo = 0
-    dur_refuerzo = 0
-    int_refuerzo = 0
     f_compensa = 0
     vol_riego_p_ha = 0
     #revisar que se calcule a partir de una valor de volumen de la Inspección sobre sup a distribuir
@@ -43,10 +31,13 @@ class riegoSecundario:
              caudal_canal = 100,
              dur_turno = 24,
              fecha_inicio = "01-01-2022",
-             cabeza_cola, # objeto JSON con el esquema de estrategias de riego del padron
-             modo # objeto JSON con los modos de riego del padron
+             cabeza_cola = 1,
+             modo = 0,
+             corte_agua = 0,
+             simular = 0,
+             volumen_tiempo = 0,
              ):
-   
+
        self.padron = pd.read_json(padron)  # Objeto json del padrón de riego.
        self.refuerzo = pd.read_json(refuerzo) # Objeto json del los refuerzos vincualdos al padrón.
        self.solicitud = pd.read_json(solicitud) # Objeto json de las solicitudes de riego vinculadas al padrón.
@@ -55,9 +46,12 @@ class riegoSecundario:
        self.dur_turno = dur_turno
        self.fecha_inicio = pd.to_datetime(fecha_inicio, dayfirst = True, errors = 'ignore')
        self.cabeza_cola = pd.read_json(cabeza_cola) # Parámetro de configuración de estrategia de riego de la inspección
-       self.modo = pd.read_json(modo)
+       self.modo = pd.read_json(modo) #Arreglo de modos de riego Grupos/Subgrupos/Cauces
+       self.corte_agua = corte_agua
+       self.simular = simular
+       self.volumen_tiempo = volumen_tiempo
 
-       ''' 
+       '''
        Listado del padrón de regantes: padron
        Duración del turno: dur_turno
        Caudal en cabecera de canal: caudal_canal
@@ -257,13 +251,13 @@ class riegoSecundario:
             n = n + 1
 
         #Redeterminación del caudal a partir de los vectores de volumen y tiempo contemplando que Q = V/T
-        df_turno.Caudal = (df_turno.Volumen/(self.get_tpo_riego_ha() * self.get_sup_riego()))*(1/self.f_escala)
+        df_turno['Caudal'] = (df_turno.Volumen/(self.get_tpo_riego_ha() * self.get_sup_riego()))*(1/self.f_escala)
 
         df_turno['CC'] = self.padron['CC']
         df_turno['PP'] = self.padron['PP']
         df_turno['id_parcela'] = self.padron['id_parcela']
 
-        #Cambia el índice al idPdron y presenta en json con clave en base a idPadron
+        #Cambia el índice al idPdron y presenta en json con clave en base al índice
         df_turno.index = self.padron['idPadron']
         return df_turno.to_json(orient = 'index', date_format = 'iso', date_unit="s", double_precision = 1)
 
