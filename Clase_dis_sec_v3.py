@@ -45,7 +45,7 @@ class riegoSecundario:
        self.caudal_canal = caudal_canal
        self.dur_turno = dur_turno
        self.fecha_inicio = pd.to_datetime(fecha_inicio, dayfirst = True, errors = 'ignore')
-       self.cabeza_cola = pd.read_json(cabeza_cola) # Parámetro de configuración de estrategia de riego de la inspección
+       self.cabeza_cola = pd.read_json(cabeza_cola) # Vector de estrategias de riego de los Cauces.
        self.modo = pd.read_json(modo) #Arreglo de modos de riego Grupos/Subgrupos/Cauces
        self.corte_agua = corte_agua
        self.simular = simular
@@ -111,13 +111,14 @@ class riegoSecundario:
         Resultado:
         Superficie de riego:sup_riego
         Valor obtenido para determinar la superficie válida para riego de un padrón, cauce o canal en un turno determinado.
+        En caso de simulación (simular = 1) se devuelve el agregado de las superficies por Grupo/Subgrupo/Cauces-
         """
 
         self.solicitud["sup_anexa"] = self.solicitud['sup_ad'] - self.solicitud['sup_res']
         self.solicitud["sup_pase"] = self.solicitud['sup_rec'] - self.solicitud['sup_ced']
         self.solicitud["sup_riego"] = (self.padron['sup_emp_reducida'] + self.solicitud["sup_anexa"] + self.solicitud["sup_pase"]) * self.padron["ha_si"] * self.solicitud["ha_activa"]
 
-        if self.simular == 1: #Agrega la superficie por nivel: Grupo, Subgrupo, Cauces.
+        if self.simular == 1: #Agrega la superficie por nivel: Grupo, Subgrupo, Cauces. No se tienen en cuenta las solicitudes
            sup_grupo = self.padron.groupby('Grupo').sum()
            sup_subgrupo = self.padron.groupby('Subgrupo').sum()
            sup_cauce = self.padron.groupby('orden_cauce').sum()
@@ -164,14 +165,18 @@ class riegoSecundario:
     def get_tpo_recorrido(self):
         '''
         Este método devuelve el tiempo de recorrido que se aplicará al cálculo del tiempo de riego por ha.
-        Dependerá de la estrategia de riego cabeza-cola.
+        Dependerá de la estrategia de riego cabeza-cola de cada cauce.
+        Devuelve la suma de todos los tpos para determinar el tpo_riego_ha
         '''
-        if self.cabeza_cola == 1:
-            tpo_recorrido =self.tpo_rec_toma + self.tpo_rec_cabeza_cola
-        else:
-            tpo_recorrido = self.tpo_rec_cola_cabeza
-        
-        return tpo_recorrido
+
+        tpo_recorrido = (self.padron['tpo_rec_toma'] + self.padron['tpo_rec_cabeza_cola'])*self.cabeza_cola['cabeza_cola']
+        for i in range(len(tpo_recorrido)):
+            if tpo_recorrido[i] == 0:
+                tpo_recorrido[i] = self.padron['tpo_rec_cola_cabeza'][i]
+            else:
+                tpo_recorrido[i] = tpo_recorrido[i]
+
+        return sum(tpo_recorrido)
 
     def get_tpo_riego_ha(self, modo = 0):
         '''
