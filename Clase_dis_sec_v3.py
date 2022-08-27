@@ -1,7 +1,9 @@
 #Importamos los paquetes complementarios:
 import pandas as pd
+from pandas.core.groupby import DataFrameGroupBy, SeriesGroupBy
 
-class riegoSecundario:
+
+class redSecundaria:
     """
     Clase Riego Secundario:
     Tiene como objeto principal generar el cuadro de turno para distribución secundaria de una red de riego,
@@ -11,17 +13,41 @@ class riegoSecundario:
     -Calcula los caudales para estabilizar el canal (Simulador)
     """
 
-#    Definición de propiedades de la clase
+    #    Definición de propiedades de la clase
+    f_tiempo = 24*60 #min/dia
     f_escala = ((24*60*60)/1000)
     f_lamina = 10
 
     #Parámetros de configuración de la Inspección
-    f_compensa = 0
-    vol_riego_p_ha = 0
+    f_compensa = 1 #factor de compensación x pérdidas del canal
+
     #revisar que se calcule a partir de una valor de volumen de la Inspección sobre sup a distribuir
     # vol_riego_p_ha = vol_riego_p / sum(self.padron['sup_emp_reducida'])
 
 #   Constructor de la clase / Propiedades
+    '''
+    Listado del padrón de regantes: padron
+    Duración del turno: dur_turno
+    Caudal en cabecera de canal: caudal_canal
+    Fecha de inicio de la programación del turno: fecha_inicio
+    Estrategia de riego: cabeza_cola
+    Tiempo de recorrido de toma: tpo_rec_toma
+    Tiempo de recorrido de cauce para riego cabeza - cola: tpo_rec_cabeza_cola
+    Tiempo de recorrido de cauce para riego cola - cabeza: tpo_rec_cola_cabeza
+    Tiempo de descuelgue: tpo_descuelgue
+    Superficie empadronada reducida: sup_emp_reducida
+    Superficie adicional: sup_ad
+    Superficie restringida: sup_res
+    Superficie recibida: sup_rec
+    Superficie cedida: sup_cedida
+    Hectárea activa: ha_activa
+    Hectátrea sí/no :ha_si
+    Caudal de refuerzo: caudal_refuerzo
+    Duración de refuerzo: dur_refuerzo
+    Intensidad de refierzo: int_refuerzo
+    Factor de compensación_ f_compensa
+    Volumen de riego programado: vol_riego_p
+    '''
 
     def __init__(self,
              padron,
@@ -31,11 +57,8 @@ class riegoSecundario:
              caudal_canal = 100,
              dur_turno = 24,
              fecha_inicio = "01-01-2022",
-             cabeza_cola = 1,
-             modo = 0,
-             corte_agua = 0,
-             simular = 0,
-             volumen_tiempo = 0,
+             modos = 0,
+             vol_riego_p_ha = 0
              ):
 
        self.padron = pd.read_json(padron)  # Objeto json del padrón de riego.
@@ -45,114 +68,83 @@ class riegoSecundario:
        self.caudal_canal = caudal_canal
        self.dur_turno = dur_turno
        self.fecha_inicio = pd.to_datetime(fecha_inicio, dayfirst = True, errors = 'ignore')
-       self.cabeza_cola = pd.read_json(cabeza_cola) # Vector de estrategias de riego de los Cauces.
-       self.modo = pd.read_json(modo) #Arreglo de modos de riego Grupos/Subgrupos/Cauces
-       self.corte_agua = corte_agua
-       self.simular = simular
-       self.volumen_tiempo = volumen_tiempo
+       self.modos = pd.read_json(modos) #Arreglo de modos de riego Grupos/Subgrupos/Cauces
+       self.vol_riego_p_ha = vol_riego_p_ha #dato que se pasa al generar el turno.
 
-       '''
-       Listado del padrón de regantes: padron
-       Duración del turno: dur_turno
-       Caudal en cabecera de canal: caudal_canal
-       Fecha de inicio de la programación del turno: fecha_inicio
-       Estrategia de riego: cabeza_cola
-       Tiempo de recorrido de toma: tpo_rec_toma
-       Tiempo de recorrido de cauce para riego cabeza - cola: tpo_rec_cabeza_cola
-       Tiempo de recorrido de cauce para riego cola - cabeza: tpo_rec_cola_cabeza
-       Tiempo de descuelgue: tpo_descuelgue
-       Superficie empadronada reducida: sup_emp_reducida
-       Superficie adicional: sup_ad
-       Superficie restringida: sup_res
-       Superficie recibida: sup_rec
-       Superficie cedida: sup_cedida
-       Hectárea activa: ha_activa
-       Hectátrea sí/no :ha_si
-       Caudal de refuerzo: caudal_refuerzo
-       Duración de refuerzo: dur_refuerzo
-       Intensidad de refierzo: int_refuerzo
-       Factor de compensación_ f_compensa
-       Volumen de riego programado: vol_riego_p
-       '''
+       # 1-Integra las solicitudes de riego al padron y calcula la superficie efecutiva de riego
+       self.padron['sup_anexa'] = self.solicitud['sup_ad'] - self.solicitud['sup_res']
+       self.padron['sup_pase'] = self.solicitud['sup_rec'] - self.solicitud['sup_ced']
+       self.padron['sup_riego'] = (self.padron['sup_emp_reducida'] + self.padron['sup_anexa'] + self.padron['sup_pase']) \
+                                  * self.padron["ha_si"] * self.solicitud["ha_activa"]
+
+       # 2-Agrupa y agrega padron por cauces / subgrupos / grupos
+       self.cauces_g = self.padron.groupby('orden_cauce')
+       self.cauces = self.padron.groupby('orden_cauce').sum()
+       self.subgrupos = self.padron.groupby('Subgrupo').sum()
+       self.grupos = self.padron.groupby('Grupo').sum()
+       self.subgrupos_cauce = self.padron.groupby(['orden_cauce','Subgrupo']).sum()
 
 
-    def set_segmentar(self):
-        '''
-        Segmentación de padrón, solicitudes, refuerzos y reservorios en base al modo de riego
-        '''
-        self.modo
-        #Segmentación del padron inicial, solicitudes y refuerzos en subgrupo x cauces
-        subpadrones = self.padron.groupby('orden_cauce')
-        subsolicitudes = self.solicitud.groupby('orde_cauce')
-        subrefuerzos = self.refuerzo.groupby('orden_cauce')
+       self.ctd_cauces = len(self.cauces)
+       self.ctd_subgrupos = len(self.subgrupos)
+       self.ctd_grupos = len(self.grupos)
 
-        # Conformación de diccionario de subpadrones x cauces del padron inicial
-        subpadron = {}
-        for cauce in subpadrones.groups:
-            # print (f'Subpadron de Cauce:{group}')
-            subpadron[cauce] = subpadrones.get_group(cauce)
+       # 3-Ordena cada cauce en base a los modos de distribución (cabeza_cola)
+       # Toma como referencia el riego por cabeza:'ascending=True' para el .sort_index()
+       self.cabeza_cola_bool = self.modos.cabeza_cola == 1
 
-        pass
-
-
-
-
-# Métodos generales de la clase: determinación de superficie, volumen, tiempo y caudal.
+    # Métodos generales de la clase: determinación de superficie, volumen, tiempo y caudal.
 
     def get_sup_riego(self):
         """
-        Este método devuelve la superficie de riego que se aplica en el cálculo de turno o para simulación de caudales.
+        Este método devuelve la superficie de riego que se requiere en el cálculo de turno o para simulación de caudales.
         Es aplicable en los distintos ámbitos: parcela/toma/cauce(hijuela)/canal(inspección)
 
-        Datos:
+        Datos obtenidos del objeto padron:
         1)Superficie empadronada reducida: sup_emp_reducida
         Dato obtenido del servicio (WS) de padrón de DGI.
         Dato principal afectado al cálculo de la superficie de riego.
-
         2)Superficie adicional:sup_ad
         Superficie adicional que solicita el regante mediante la solicitud de riego.
-
         3)Superficie restringida: sup_res
         Superficie que compensa el pedio de superficie adicional.
         Lo determina el regante en la solicitud de riego para el balance de riego cuando solicita una sup_ad.
-
         4)Superficie recibida:sup_rec
         Superficie recibida por pases que son establecidos mediante solicitudes de riego de los regantes.
-
         5)Superficie cedida:sup_cedida
         Superficie cedida por pases que son establecidos mediante solicitudes de riego de los regantes.
-
         6)Has activas:ha_activa
         Factor que ajusta la superficie activa para riego.
-
         7)Condición de ha si/no:ha_si
         Estado de habilitación del padrón obtenido del servicio (SW) de Ha si/no del DGI.
 
         Resultado:
         Superficie de riego:sup_riego
-        Valor obtenido para determinar la superficie válida para riego de un padrón, cauce o canal en un turno determinado.
+        Valor obtenido para determinar la superficie efectiva para riego de un padrón, cauce o canal contemplando las
+        solicitudes de los regantes.
         En caso de simulación (simular = 1) se devuelve el agregado de las superficies por Grupo/Subgrupo/Cauces-
         """
+        sup_riego_df = pd.DataFrame({'cauce': self.cauces.sup_riego,
+                                     'subgrupo': self.subgrupos.sup_riego,
+                                     'grupo': self.grupos.sup_riego}).fillna(value=0)
+        return sup_riego_df # Devuelve un DF con las sup_riego agregadas por niveles
 
-        self.solicitud["sup_anexa"] = self.solicitud['sup_ad'] - self.solicitud['sup_res']
-        self.solicitud["sup_pase"] = self.solicitud['sup_rec'] - self.solicitud['sup_ced']
-        self.solicitud["sup_riego"] = (self.padron['sup_emp_reducida'] + self.solicitud["sup_anexa"] + self.solicitud["sup_pase"]) * self.padron["ha_si"] * self.solicitud["ha_activa"]
+    def get_tpo_red(self):
+        '''
+        Este método devuelve un vector con el tiempo de red que corresónde a cada cauce del padrón.
+        Dependerá de la estrategia de riego cabeza-cola de cada cauce.
+        Para determinar el tpo_riego_ha se requiere tomar la suma de todos los valores
+        '''
 
-        if self.simular == 1: #Agrega la superficie por nivel: Grupo, Subgrupo, Cauces. No se tienen en cuenta las solicitudes
-           sup_grupo = self.padron.groupby('Grupo').sum()
-           sup_subgrupo = self.padron.groupby('Subgrupo').sum()
-           sup_cauce = self.padron.groupby('orden_cauce').sum()
-           #sup_toma = self.padron.groupby('orden_toma').sum()
+        for cauce in range(1, (self.ctd_cauces + 1)):
+            if self.modos.cabeza_cola[cauce] == 0:
+                self.cauces['tpo_recorrido'] = self.cauces['tpo_rec_toma'] + self.cauces['tpo_rec_cabeza_cola']
+            else:
+                self.cauces['tpo_recorrido'] = self.cauces['tpo_rec_cola_cabeza']
 
-           #Composición de un df con los agregados de sup_riego para cada uno de los niveles: grupo/subgrupo/cauce/toma
-           sup_riego_df = pd.DataFrame({'Grupo': sup_grupo.sup_emp_reducida,
-                                        'Subgrupo':sup_subgrupo.sup_emp_reducida,
-                                        'Cauce': sup_cauce.sup_emp_reducida})
-                                        #'Toma': sup_toma.sup_emp_reducida})
-           return sup_riego_df.fillna(value=0)
+        self.cauces['tpo_red'] = self.cauces['tpo_descuelgue'] - self.cauces['tpo_recorrido']
 
-        else:
-            return self.solicitud["sup_riego"].values
+        return self.cauces['tpo_red'] # Devuelve una serie con el tpo_red por cauce
 
     def get_cap_refuerzo(self):
         """
@@ -181,79 +173,148 @@ class riegoSecundario:
         reservorio = sum(self.reservorio["volumen"])
         return reservorio
 
-    def get_tpo_recorrido(self):
-        '''
-        Este método devuelve un vector con el tiempo de recorrido que corresónde a cada parcela del padrón.
-        Dependerá de la estrategia de riego cabeza-cola de cada cauce.
-        Para determinar el tpo_riego_ha se requiere tomar la suma de todos los valores
-        '''
-
-        tpo_recorrido = (self.padron['tpo_rec_toma'] + self.padron['tpo_rec_cabeza_cola'])*self.cabeza_cola['cabeza_cola']
-        for i in range(len(tpo_recorrido)):
-            if tpo_recorrido[i] == 0:
-                tpo_recorrido[i] = self.padron['tpo_rec_cola_cabeza'][i]
-            else:
-                tpo_recorrido[i] = tpo_recorrido[i]
-
-        return tpo_recorrido
-
-    def get_tpo_red(self):
-        '''
-        El tiempo de red contempla las particularidades de cada uno de los tiempos de recorrido y descuelgue de cada cauce y toma.
-        Este método determina el tpo_red para cada parcela del padron.
-        '''
-        tpo_red = self.padron['tpo_descuelgue'] - self.get_tpo_recorrido()
-        return tpo_red
-
-    def get_tpo_riego_ha(self):
-        '''
-        Este método devuelve el tiempo de riego por ha que se debe aplicar para la determinación del tiempo de riego del turno.
-        Contempla las modalidades de distribución independiente (modo = 0) y secuencial (modo = 1).
-        '''
-        tpo_riego_ha = (self.dur_turno - sum(self.get_tpo_red())) / sum(self.get_sup_riego())
-        return tpo_riego_ha
-
-    def get_tpo_riego(self):
-        ''' NOTA: En este método se necesita agregar la lógica que contemple el objeto modo.json
-        para determinar el tpo_riego en base al modo de riego'''
-
-        '''
-        #Determinación de tiempo para modalidad de riego independiente (modo = 0).
-        if self.modo == 0:
-            tpo_riego_ha = (self.dur_turno - sum(get_tpo_red())) / sum(self.get_sup_riego())
-        #Determianción de tiempo para modalidad de riego secuencial (modo = 1).
-        else:
-            f_tpo = self.dur_turno / (self.get_vol_riego_ha() * sum(self.get_sup_riego()))
-            tpo_riego_ha = f_tpo * self.get_vol_riego_ha()
-        '''
-
-        # Si el Modo de riego es SECUENCIAL (modo = 0) el tiempo de riego se determina con:
-        if self.modo == 0:
-            tpo_riego = [self.get_tpo_riego_ha() * self.get_sup_riego()] + self.get_tpo_red()
-
-        # Si el Modo de riego es INDEPENDIENTE (modo = 1) el tiempo de riego se determina con:
-        else:
-            tpo_riego = self.dur_turno #REVISAR ESTA ASIGNACION
-
-        return tpo_riego
-
-    def get_vol_riego_ha(self, simular = 0):
-        self.simular = simular
+    def get_vol_riego_ha(self):
         """
-        Este método devuelve el volumen de riego por ha que se debe aplicar para la determinación del volumen de riego del turno
-        o para la simulación. También se establece por medio del parámetro f_compensa si se contemplarán el aporte de los reservorios.
+        Este método devuelve el volumen de riego por ha que se debe aplicar para la determinación del volumen de riego
+        efectivo en todo el padron. Contempla descontar el tiempo de red, que son los tiempos de la inercia propia
+        de la red de distribución
+        También se contempla por medio del parámetro f_compensa las pérdidas del canal.
         La determinación del volumen de riego se plantea en todos los ámbitos:parcela/toma/cauce(hijuela)/canal (inspección)
         El vol_riego será el determinado por el ámbito donde se aplique el método.
         """
-        cr = self.caudal_canal / sum(self.get_sup_riego())
-        vol_base_ha = cr * self.dur_turno * self.f_escala
-        refuerzo = self.get_cap_refuerzo() * self.int_refuerzo
-        vol_riego_ha = vol_base_ha * self.f_compensa + ((refuerzo + (self.get_reservorio()) * self.simular) / sum(self.get_sup_riego()))
+        cr = self.caudal_canal / self.get_sup_riego().cauce.sum()
+        vol_base_ha = cr * (self.dur_turno-(self.get_tpo_red().sum()/self.f_tiempo)) * self.f_escala
+        refuerzo = self.get_cap_refuerzo() #* self.int_refuerzo
+        reservorio = self.get_reservorio()
+        vol_riego_ha = vol_base_ha * self.f_compensa + ((refuerzo + reservorio) / self.get_sup_riego().cauce.sum())
         return vol_riego_ha
 
-    def get_vol_riego(self, simular = 0):
-        volumen = self.get_vol_riego_ha(self.simular) * self.get_sup_riego(simular)
-        return volumen
+    def get_vol_riego(self):
+        '''
+        Esté método devuelve un DF con el volumen de riego agregado por cada nivel.
+        :return: Diccionario con los volúmenes de riego por cauce organizados por orden de riego en el padron.
+        '''
+        vol_riego_df = self.get_sup_riego() * self.get_vol_riego_ha()
+        return vol_riego_df
+
+    def get_tpo_riego_ha(self):
+        tpo_riego_ha = (self.dur_turno-(self.get_tpo_red().sum()/self.f_tiempo)) / self.get_sup_riego().cauce.sum()
+        return tpo_riego_ha
+
+    def get_tpo_turnado(self):
+        '''
+        Define el tpo_turnado agregado por cada nivel que será asignado como dur_turno a cada cauce
+        en base a los modos de riego definidos para cada cauce.
+        Se expresa en timedelta.
+        '''
+
+        vol_turno = self.get_vol_riego().cauce.sum()
+        f_turnado = (self.dur_turno / vol_turno)
+
+        '''
+        tpo_turnado_cauce = pd.to_timedelta((self.get_vol_riego().cauce * f_turnado),unit = 'd')
+        tpo_turnado_subgrupo = pd.to_timedelta((self.get_vol_riego().subgrupo * f_turnado),unit = 'd')
+        tpo_turnado_grupo = pd.to_timedelta((self.get_vol_riego().grupo * f_turnado),unit = 'd')
+        tpo_turnado_df = pd.DataFrame({'cauce':tpo_turnado_cauce,
+                                       'subgrupo': tpo_turnado_subgrupo,
+                                       'grupo': tpo_turnado_grupo}
+                                      )
+
+        '''
+        tpo_turnado_df = (self.get_vol_riego() * f_turnado)
+        return tpo_turnado_df
+
+    def get_fecha_inicio_turnado(self):
+        '''
+        Determina las fechas de inicio de cauces y subgrupos a partir del DF de tpo_turnado.
+        Estas fechas se aplicarán a la ivocación de turnos en base a los modos de riego en set_modo_riego().
+        Se expresa como tipo datetime.
+        '''
+
+        fecha_fin_c = self.fecha_inicio + pd.to_timedelta(self.get_tpo_turnado().cauce, unit='d')
+        fecha_fin_sg = self.fecha_inicio + pd.to_timedelta(self.get_tpo_turnado().subgrupo, unit='d')
+        fecha_fin_df = pd.DataFrame({'cauce':fecha_fin_c,
+                                     'subgrupo':fecha_fin_sg})
+
+        return fecha_fin_df
+
+    def set_modo_riego(self):
+        '''
+        Método que analiza los modos de riego de grupo y subgrupo para asignar la duración de turno y fecha de inicio
+        a cada uno de las cauces del padron.
+        :return: DF integrado por una serie con los tiempos de turnado en formado timedelta y una serie con las fechas
+        de inicio en formato datetime.
+        '''
+        turnado = pd.Series([0])
+        inicio = pd.Series([0])
+
+        for cauce in range(1, (self.ctd_cauces + 1)):
+            # Análisis de modos de riego para asignar tiempo de turnado y fecha de inicio al turnado de cada cauce
+            if self.modos.subgrupo[cauce] == 1:  # SUBGRUPO SECUENCIAL, independientemente del modo de GRUPO
+                turnado[cauce] = self.get_tpo_turnado().cauce[cauce]
+                inicio[cauce] = self.get_fecha_inicio_turnado().cauce[cauce]  # fecha_fin cauce previo
+                #inicio[cauce] = self.fecha_inicio + pd.to_timedelta(self.get_tpo_turnado().cauce[cauce-1], unit='d')
+
+            elif (self.modos.subgrupo[cauce] == 0) and (self.modos.grupo[cauce] == 1):  # GRUPO SECUENCIAL Y SUBGRUPO INDEPENDIENTE
+                subgrupo = sum(self.subgrupos_cauce.index[cauce-1]) - cauce # Artilugio algebraico para recuperar el id del subgrupo vinculado al cauce.
+                turnado[cauce] = self.get_tpo_turnado().subgrupo[subgrupo]
+                inicio[cauce] = self.get_fecha_inicio_turnado().subgrupo[subgrupo]  # REVISAR!!
+                #inicio[cauce] = self.fecha_inicio + pd.to_timedelta(self.get_tpo_turnado().subgrupo[subgrupo], unit='d')
+
+            else:  # GRUPO Y SUBGRUPO INDEPENDIENTE
+                turnado[cauce] = self.dur_turno
+                inicio[cauce] = self.fecha_inicio
+
+        modo_riego_df = pd.DataFrame({'turnado':turnado,
+                                      'inicio':inicio}
+                                    )
+
+        return modo_riego_df
+
+    def get_caudal_riego(self,simular=0): #Contemplar recibir el padron del escenario de simulación
+        self.simular = simular
+        '''
+        Genera el caudal de riego por cauce dentro del padrón asignado para turnado.
+        :return: DF con los caudales agregados por niveles grupo/subgrupo/cauce
+        '''
+        if self.simular==1:
+            caudal_riego = (self.vol_riego_p_ha * self.get_sup_riego().cauce / self.set_modo_riego().turnado) * (1 / self.f_escala)
+        else:
+            caudal_riego = (self.get_vol_riego().cauce / self.set_modo_riego().turnado) * (1 / self.f_escala)
+
+        return caudal_riego
+
+    def get_subpadron(self):
+        '''
+        Segmenta los padrones de cada cauce para ordenar en base a la estrategia de riego (cabeza_cola).
+        :return: Diccionario con los padrones por cauce y ordenados.
+        '''
+        self.subpadron = {}
+
+        for cauce in range(1, (self.ctd_cauces + 1)):
+           # segmentación de padron y solicitudes en cauces. OK
+           self.subpadron[cauce] = self.cauces_g.get_group(cauce)
+
+           # ordenamiento de cada cauce por cabeza_cola. OK
+           self.subpadron[cauce] = self.subpadron[cauce].sort_index(ascending=self.cabeza_cola_bool[cauce])
+
+        return self.subpadron
+
+class cuadroTurno:
+
+    f_lamina = 10
+
+    def __init__(self, padron, tiempo, inicio, caudal, volumen, vol_riego_p_ha, volumen_tiempo = 1):
+        #Parámetros que se pasan desde redSecundaria().
+        self.padron = padron.fillna(value=0) #get_subpadron()
+        self.inicio = inicio #get_fecha_inicio()
+        self.caudal = caudal #get_caudal_riego() puede ser simulado o no.
+        self.volumen = volumen #get_vol_riego()
+        self.tiempo = tiempo
+
+        #Parámetros propios de la clase.
+        self.vol_riego_p_ha = vol_riego_p_ha #dato que se pasa al generar el turno.
+        self.volumen_tiempo = volumen_tiempo #dato que se pasa desde la configuración de la Inspección.
 
     def set_turno_riego(self):
         '''
@@ -263,16 +324,16 @@ class riegoSecundario:
         Este alcance se pasará con la variable lista que se compone de
         la secuancia de superficies organizadas por orden de riego.
         '''
-        df_turno = pd.DataFrame({'Caudal': 0.0,
-                                 'Volumen': self.get_vol_riego(self.simular),
+        df_turno = pd.DataFrame({'Caudal': self.caudal,
+                                 'Volumen': self.volumen,
                                  'Inicio': pd.to_datetime('01-01-2020 00:00'),
-                                 'Tiempo': pd.to_timedelta(self.get_tpo_riego(), unit = 'd'),
+                                 'Tiempo': pd.to_timedelta(self.tiempo, unit = 'd'),
                                  'Fin': pd.to_datetime('01-01-2020 00:00')
-                                 })
+                                 }).reset_index(drop=True) #reinicia el indice del DF para unificar el criterio de asignación en cada subpadron
 
         # el tiempo de riego asignado a la parcela se interpreta como timeoffset para la programación de inicio y fin de turno
-        df_turno.loc[0,'Inicio'] = self.fecha_inicio
-        df_turno.loc[0,'Fin'] = self.fecha_inicio + df_turno.loc[0,'Tiempo']
+        df_turno.loc[0,'Inicio'] = self.inicio
+        df_turno.loc[0,'Fin'] = self.inicio + df_turno.loc[0,'Tiempo']
 
         # Desarrollo de vector de fechas de inicio y fin a partir de los tiempos de riego aprovechando la operatorias con datos datetime
         n = 1
@@ -290,54 +351,40 @@ class riegoSecundario:
             df_turno.loc[n, 'Tiempo'] = str(df_turno.loc[n, 'Tiempo'])
             n = n + 1
 
-        #Determina caudales x cauce para el caso de escenarios de simulación
-        if self.simular == 1:
-            df_turno['Caudal'] = self.set_simulador()
-        #Redeterminación del caudal a partir de los vectores de volumen y tiempo contemplando que Q = V/T
-        else:
-            df_turno['Caudal'] = (df_turno.Volumen/(self.get_tpo_riego_ha() * self.get_sup_riego()))*(1/self.f_escala)
+        df_turno['Caudal'] = self.caudal
 
         #Presenta volumen y tiempo o sólo tiempo de riego en el cuadro de turnos
-        if self.volumen_tiempo == 1:
+        if self.volumen_tiempo == 0:
             df_turno['Volumen'] = 0
-        else:
-            pass
 
+        #Compone datos complementarios en el Data Frame antes de generar el json
         df_turno['CC'] = self.padron['CC']
         df_turno['PP'] = self.padron['PP']
         df_turno['id_parcela'] = self.padron['id_parcela']
 
         #Cambia el índice al idPdron y presenta en json con clave en base al índice
-        df_turno.index = self.padron['idPadron']
+        df_turno.index = self.padron['id_parcela']
         return df_turno.to_json(orient = 'index', date_format = 'iso', date_unit="s", double_precision = 1)
 
     def set_cuenta_agua(self):
         '''
                 Este método calcula la cuenta de agua en los distintos ámbitos de alcance.
                 Se expresa en láminas (mm).
-                El volumen programado (vol_riego_p) es suministrado por la inspección como dato.
+                El volumen programado x ha (vol_riego_p_ha) es suministrado por la inspección como dato.
         '''
-        lamina_p = (self.vol_riego_p_ha * self.padron['sup_emp_reducida']).values / self.f_lamina
-        volumen = (self.get_vol_riego_ha() * self.get_sup_riego())
-        lamina_e = volumen / self.f_lamina
+        lamina_p = (self.vol_riego_p_ha * self.padron['sup_riego']) / self.f_lamina # lámina programada por parcela
+        lamina_e = self.volumen / self.f_lamina # lámina entregado por parcela en el turno
 
         cuenta_agua = lamina_p - lamina_e
-        df_cuenta_agua = pd.DataFrame({'Volumen': volumen,
-                                       'Agua_Entregada': lamina_e,
-                                       'Balance': cuenta_agua})
+        df_cuenta_agua = pd.DataFrame({'Agua Programada':lamina_p,
+                                       'Agua Entregada': lamina_e,
+                                       'Balance': cuenta_agua,
+                                       'Volumen Entregado': self.volumen})
 
         #Compone datos complementarios en el Data Frame antes de generar el json
         df_cuenta_agua['CC'] = self.padron['CC']
         df_cuenta_agua['PP'] = self.padron['PP']
         df_cuenta_agua['id_parcela'] = self.padron['id_parcela']
 
-        df_cuenta_agua.index = self.padron['idPadron']
+        df_cuenta_agua.index = self.padron['id_parcela']
         return df_cuenta_agua.to_json(orient = 'index', double_precision = 1)
-
-    def set_simulador(self): #Contemplar recibir el padron del escenario de simulación
-        caudal = (self.get_vol_riego(simular = 1) / self.get_tpo_riego(simular = 1)) * (1 / self.f_escala)
-        return caudal
-
-
-
-
