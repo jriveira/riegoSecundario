@@ -58,7 +58,8 @@ class redSecundaria:
              dur_turno = 24,
              fecha_inicio = "01-01-2022",
              modos = 0,
-             vol_riego_p_ha = 0
+             vol_riego_p_ha = 0,
+             simular = 0
              ):
 
        self.padron = pd.read_json(padron).fillna(value=0)  # Objeto json del padrón de riego.
@@ -70,6 +71,7 @@ class redSecundaria:
        self.fecha_inicio = pd.to_datetime(fecha_inicio, dayfirst = True, errors = 'ignore')
        self.modos = pd.read_json(modos) #Objeto JSON con los modos de riego y distribución (cabeza_cola)
        self.vol_riego_p_ha = vol_riego_p_ha #dato que se pasa al generar el turno.
+       self.simular = simular
 
        # 1-Integra las solicitudes de riego al padron y calcula la superficie efecutiva de riego
        self.padron['sup_anexa'] = self.solicitud['sup_ad'] - self.solicitud['sup_res']
@@ -210,16 +212,6 @@ class redSecundaria:
         vol_turno = self.get_vol_riego().cauce.sum()
         f_turnado = (self.dur_turno / vol_turno)
 
-        '''
-        tpo_turnado_cauce = pd.to_timedelta((self.get_vol_riego().cauce * f_turnado),unit = 'd')
-        tpo_turnado_subgrupo = pd.to_timedelta((self.get_vol_riego().subgrupo * f_turnado),unit = 'd')
-        tpo_turnado_grupo = pd.to_timedelta((self.get_vol_riego().grupo * f_turnado),unit = 'd')
-        tpo_turnado_df = pd.DataFrame({'cauce':tpo_turnado_cauce,
-                                       'subgrupo': tpo_turnado_subgrupo,
-                                       'grupo': tpo_turnado_grupo}
-                                      )
-
-        '''
         tpo_turnado_df = (self.get_vol_riego() * f_turnado)
         return tpo_turnado_df
 
@@ -244,47 +236,54 @@ class redSecundaria:
         :return: DF integrado por una serie con los tiempos de turnado en formado timedelta y una serie con las fechas
         de inicio en formato datetime.
         '''
-        turnado = pd.Series([0])
-        inicio = pd.Series([self.fecha_inicio])
+        turnado_c = pd.Series([0])
+        turnado_sg = pd.Series([0])
+        inicio_c = pd.Series([self.fecha_inicio])
+        inicio_sg = pd.Series([self.fecha_inicio])
 
         for cauce,subgrupo in self.subgrupos_cauce.index:
+            # Factor que contempla la relación de Vsg/Vg
+            f_g = self.get_vol_riego().subgrupo[subgrupo] / self.get_vol_riego().cauce.sum()
             # Factor que contempla la relación de Vc/Vsg
             f_sg = self.get_vol_riego().cauce[cauce] / self.get_vol_riego().subgrupo[subgrupo]
-            # Factor que contempla la relación de Vc/Vg
-            f_g = self.get_vol_riego().subgrupo[subgrupo] / self.get_vol_riego().cauce.sum()
 
             # Análisis de modos de riego para asignar tiempo de turnado y fecha de inicio al turnado de cada cauce
-            # GRUPO Y SUBGRUPO SECUENCIAL
+            # Caso 0: GRUPO Y SUBGRUPO SECUENCIAL
             if (self.modos.grupo[cauce] == 1) and (self.modos.subgrupo[cauce] == 1):
-                turnado[cauce] = f_g * f_sg * self.dur_turno
-                inicio[cauce] = inicio[cauce-1] + pd.to_timedelta(turnado[cauce-1], unit='d')
-                #inicio[cauce] = inicio[cauce-1] + pd.to_timedelta(turnado[cauce], unit='d')
+                turnado_c[cauce] = f_g * f_sg * self.dur_turno
+                inicio_c[cauce] = inicio_c[cauce-1] \
+                                  + pd.to_timedelta(turnado_c[cauce-1], unit='d')
 
-            # GRUPO SECUENCIAL Y SUBGRUPO INDEPENDIENTE
+            # Caso 1: GRUPO SECUENCIAL Y SUBGRUPO INDEPENDIENTE - REVISAR!
             elif (self.modos.grupo[cauce] == 1) and (self.modos.subgrupo[cauce] == 0):
-                turnado[cauce] = f_g * self.dur_turno
-                inicio[cauce] = inicio[cauce] + pd.to_timedelta(turnado[cauce], unit='d')
-                #inicio[cauce] = self.get_fecha_inicio_turnado().subgrupo[subgrupo]  # REVISAR!!
+                turnado_c[cauce] = f_g * self.dur_turno
+                turnado_sg[subgrupo] = f_g * self.dur_turno
+                inicio_sg[subgrupo] = inicio_sg[subgrupo-1] \
+                                      + pd.to_timedelta(turnado_sg[subgrupo-1], unit='d')
+                inicio_c[cauce] = inicio_sg[subgrupo]
 
-            # GRUPO INDEPENDIENTE Y SUBGRUPO SECUENCIAL
+            # Caso 2: GRUPO INDEPENDIENTE Y SUBGRUPO SECUENCIAL - REVISAR!
             elif (self.modos.grupo[cauce] == 0) and (self.modos.subgrupo[cauce] == 1):
-                turnado[cauce] = f_sg * self.dur_turno
-                inicio[cauce] = inicio[cauce] + pd.to_timedelta(turnado[cauce], unit='d')
-                #inicio[cauce] = self.get_fecha_inicio_turnado().subgrupo[subgrupo]  # REVISAR!!
+                turnado_c[cauce] = f_sg * self.dur_turno
+                turnado_sg[subgrupo] = self.dur_turno
+                inicio_sg[subgrupo] = self.fecha_inicio
+                inicio_c[cauce]=inicio_sg[subgrupo]+ pd.to_timedelta(turnado_c[cauce-1], unit='d')
 
-            # GRUPO Y SUBGRUPO INDEPENDIENTE
+            # Caso 3: GRUPO Y SUBGRUPO INDEPENDIENTE. Parametrización por defecto.
             else:
-                turnado[cauce] = self.dur_turno
-                inicio[cauce] = self.fecha_inicio
+                turnado_c[cauce] = self.dur_turno
+                inicio_c[cauce] = self.fecha_inicio
 
-        modo_riego_df = pd.DataFrame({'turnado':turnado,
-                                      'inicio':inicio}
+        modo_riego_df = pd.DataFrame({'turnado_c':turnado_c,
+                                      'turnado_sg': turnado_sg,
+                                      'inicio_sg':inicio_sg,
+                                      'inicio_c':inicio_c}
                                     )
 
         return modo_riego_df
 
-    def get_caudal_riego(self,simular=0): #Contemplar recibir el padron del escenario de simulación
-        self.simular = simular
+    def get_caudal_riego(self): #Contemplar recibir el padron del escenario de simulación
+        #self.simular = simular
         '''
         Genera el caudal de riego por cauce dentro del padrón asignado para turnado.
         :return: DF con los caudales agregados por niveles grupo/subgrupo/cauce
@@ -307,7 +306,6 @@ class redSecundaria:
         self.subpadron = {}
 
         for cauce,dato in self.cauces_g:
-        #for cauce in range(1, (self.ctd_cauces + 1)):
            # segmentación de padron y solicitudes en cauces. OK
            self.subpadron[cauce] = self.cauces_g.get_group(cauce)
 
@@ -326,7 +324,7 @@ class cuadroTurno:
         self.inicio = inicio #red.set_modo_riego().inicio[cauce]
         self.caudal = caudal #red.get_caudal_riego(simular)[cauce] puede ser simulado o no.
         self.volumen = volumen #red.get_subpadron()[cauce].sup_riego * red.get_vol_riego_ha()
-        self.tiempo = tiempo #red.get_subpadron()[cauce].sup_riego * red.get_tpo_riego_ha()
+        self.tiempo = tiempo #red.get_subpadron()[cauce].sup_riego * red.get_tpo_riego_ha(). REVISAR: falta contemplar el tpo_red
 
         #Parámetros propios de la clase.
         self.vol_riego_p_ha = vol_riego_p_ha #dato que se pasa al generar el turno.
