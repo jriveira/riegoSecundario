@@ -100,6 +100,6 @@ class Helloworld(Resource):
     return { "data": "Hola vieja" }
 api.add_resource(Helloworld, '/hola')
 
-# Solo en modo dev
+# Solo en modo desarrollo
 if __name__ == "__main__":
   app.run(debug=True)
